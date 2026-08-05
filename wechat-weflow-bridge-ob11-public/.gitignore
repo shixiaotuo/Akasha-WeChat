@@ -1,0 +1,16 @@
+# ===== 密钥 / 本地配置（绝不提交） =====
+config.json
+config.json.bak
+*.local.json
+
+# ===== 运行产物 / 日志 =====
+bridge.log
+bridge.pid
+logs/
+__pycache__/
+*.pyc
+venv/
+.venv/
+
+# ===== 调试期产生的临时文件 =====
+_*.txt
