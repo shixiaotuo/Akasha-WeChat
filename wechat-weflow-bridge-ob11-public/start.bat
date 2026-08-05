@@ -6,41 +6,44 @@ set "BACKEND_TITLE=Akasha-Backend"
 set "BRIDGE_TITLE=Akasha-Bridge"
 set "PY=python"
 
+REM ---------- ÇåÀíÉÏ´Î²ĞÁôµÄ pid ÎÄ¼ş£¨½öµ±¶ÔÓ¦·şÎñÎ´ÔËĞĞÊ±£© ----------
+netstat -ano 2>nul | findstr ":8766" | findstr "LISTENING" >nul || if exist bridge.pid ( del /q bridge.pid )
+netstat -ano 2>nul | findstr ":11229" | findstr "LISTENING" >nul || if exist backend.pid ( del /q backend.pid )
+
 echo ============================================
-echo   Akasha-WeChat ä¸€é”®å¯åŠ¨ (åç«¯ + æ¡¥æ¥)
+echo   Akasha-WeChat Ò»¼üÆô¶¯ (ºó¶Ë + ÇÅ½Ó)
 echo ============================================
 
-REM ---------- 1. å¯åŠ¨ WorkBuddy åç«¯ (ç«¯å£ 11229) ----------
+REM ---------- 1. Æô¶¯ WorkBuddy ºó¶Ë (¶Ë¿Ú 11229) ----------
 set "BACKEND_UP=0"
 for /f "tokens=5" %%a in ('netstat -ano 2^>nul ^| findstr ":11229" ^| findstr "LISTENING"') do set "BACKEND_UP=1"
 
 if "%BACKEND_UP%"=="1" (
-    echo [è·³è¿‡] åç«¯å·²åœ¨è¿è¡Œ (ç«¯å£ 11229 å·²è¢«å ç”¨)
+    echo [Ìø¹ı] ºó¶ËÒÑÔÚÔËĞĞ (¶Ë¿Ú 11229 ÒÑ±»Õ¼ÓÃ)
 ) else (
-    echo [å¯åŠ¨] WorkBuddy åç«¯ (workbuddy_backend.py) ...
+    echo [Æô¶¯] WorkBuddy ºó¶Ë (workbuddy_backend.py) ...
     start "%BACKEND_TITLE%" /min "%PY%" workbuddy_backend.py
-    REM è®°å½•åç«¯ PIDï¼Œä¾› stop.bat ä½¿ç”¨
     timeout /t 1 >nul
     for /f "tokens=2" %%p in ('tasklist /fi "windowtitle eq %BACKEND_TITLE%" /fo list 2^>nul ^| find "PID:"') do (
-        echo %%p> backend.pid
-        echo        åç«¯ PID=%%p
+        echo %%p>backend.pid
+        echo        ºó¶Ë PID=%%p
     )
 )
 
-REM ---------- 2. å¯åŠ¨æ¡¥æ¥ (ç«¯å£ 8766) ----------
+REM ---------- 2. Æô¶¯ÇÅ½Ó (¶Ë¿Ú 8766) ----------
 set "BRIDGE_UP=0"
 for /f "tokens=5" %%a in ('netstat -ano 2^>nul ^| findstr ":8766" ^| findstr "LISTENING"') do set "BRIDGE_UP=1"
 
 if "%BRIDGE_UP%"=="1" (
-    echo [è·³è¿‡] æ¡¥æ¥å·²åœ¨è¿è¡Œ (ç«¯å£ 8766 å·²è¢«å ç”¨)
+    echo [Ìø¹ı] ÇÅ½ÓÒÑÔÚÔËĞĞ (¶Ë¿Ú 8766 ÒÑ±»Õ¼ÓÃ)
 ) else (
-    echo [å¯åŠ¨] æ¡¥æ¥ (main.py) ...
+    echo [Æô¶¯] ÇÅ½Ó (main.py) ...
     start "%BRIDGE_TITLE%" "%PY%" main.py
 )
 
 echo.
-echo å¯åŠ¨å®Œæˆã€‚Web æ§åˆ¶é¢æ¿: http://127.0.0.1:8766
-echo å…³é—­è¯·è¿è¡Œ stop.bat
+echo Æô¶¯Íê³É¡£Web ¿ØÖÆÃæ°å: http://127.0.0.1:8766
+echo ¹Ø±ÕÇëÔËĞĞ stop.bat
 echo ============================================
 pause
 endlocal
