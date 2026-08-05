@@ -17,8 +17,6 @@
 > 该服务端 **二选一**：要么是 AstrBot(aiocqhttp)，要么是本仓库附带的 **WorkBuddy 后端**（见下文）。
 > 回复走 `send_group_msg / send_private_msg` 经 `uia_sender.py` 通过 Windows UIA 自动化发回微信。
 
-若在使用过程中有任何问题，可加 QQ 群 `1103458753` 进行反馈，但鉴于作者为高三学生，若有不及时之处，还请见谅。
-
 ---
 
 ## 特性
@@ -221,6 +219,10 @@ Akasha-WeChat/
 > ⚠️ 已知限制：电脑锁屏（Win+L）后 UIA 自动化必然失效（Windows 会话锁定限制），属架构固有限制，需非 UIA 方案方可解决。
 
 ---
+
+## 原作者与致谢
+
+本项目基于原作者 **alingalingling** 的 [Akasha-WeChat](https://github.com/alingalingling/Akasha-WeChat) 进行二次开发与扩展。感谢原作者开源了这套「微信 + OneBot v11 桥接」方案，为后续的 WorkBuddy 后端集成、群名解析、前后台 / 最小化切换修复、图片回复开关以及 Web 面板原子保存等改动提供了坚实基础。
 
 ## 许可证
 
