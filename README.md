@@ -222,20 +222,6 @@ Akasha-WeChat/
 
 ---
 
-## 特别鸣谢
-
-- [AstrBot](https://github.com/AstrBotDevs/AstrBot) —— 超好的 LLM Agent 项目
-- [WeFlow](https://weflow.top) —— 超好的本地微信聊天记录导出与年度报告应用
-- [WeeMessenger](https://github.com/KilincocomilK/WeeMessenger) —— 超级优秀灵活的微信消息发送器
-
-## 特别祝愿
-
-- WeFlow 作者老师一定要高考加油啊！！！快快好起来天天开心！！！
-- 祝自己和 KilincocomilK 老师和所有高三学子也高考加油！
-- 我说白了！世界是属于高三生的！
-
----
-
 ## 许可证
 
 MIT
