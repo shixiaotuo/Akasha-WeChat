@@ -9,12 +9,36 @@ Web 控制面板模块。
 import json
 import logging
 import os
+import tempfile
 from http.server import HTTPServer, BaseHTTPRequestHandler
 
 import state
 import config
 
 log = logging.getLogger("ob11-bridge")
+
+
+def _atomic_save_config(cfg):
+    """
+    原子化保存 config.json：先写同目录临时文件，再 os.replace 替换原文件。
+    避免 (1) 写入过程中被中断导致原文件损坏；(2) 文件被其他程序以共享读方式
+    打开时直接 open("w") 报 [Errno 13] Permission denied 的瞬时锁问题。
+    """
+    target = config.CONFIG_FILE
+    d = os.path.dirname(os.path.abspath(target))
+    fd, tmp = tempfile.mkstemp(prefix=".config_", suffix=".tmp", dir=d)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            json.dump(cfg, f, ensure_ascii=False, indent=4)
+            f.write("\n")
+        os.replace(tmp, target)
+    except BaseException:
+        # 失败则清理临时文件，避免残留
+        try:
+            os.remove(tmp)
+        except OSError:
+            pass
+        raise
 
 
 PAGE = """<!DOCTYPE html>
@@ -426,9 +450,7 @@ class WebHandler(BaseHTTPRequestHandler):
                 with open(config.CONFIG_FILE, "r", encoding="utf-8") as f:
                     cfg = json.load(f)
                 cfg["group_reply_mode"] = new_mode
-                with open(config.CONFIG_FILE, "w", encoding="utf-8") as f:
-                    json.dump(cfg, f, ensure_ascii=False, indent=4)
-                    f.write("\n")
+                _atomic_save_config(cfg)
                 log.info(f"[Web] 群聊模式已切换为: {new_mode}")
             except Exception as e:
                 log.error(f"[Web] 保存配置失败: {e}")
@@ -447,9 +469,7 @@ class WebHandler(BaseHTTPRequestHandler):
                 if "_comment" not in current:
                     current["_comment"] = "微信 ↔ AstrBot 桥接 - OneBot v11 版配置"
 
-                with open(config.CONFIG_FILE, "w", encoding="utf-8") as f:
-                    json.dump(current, f, ensure_ascii=False, indent=4)
-                    f.write("\n")
+                _atomic_save_config(current)
 
                 log.info(f"[Web] 配置已保存")
                 # 运行时同步 group_reply_mode

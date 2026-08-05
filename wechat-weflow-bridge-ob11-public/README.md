@@ -110,7 +110,7 @@ Web 控制面板：**http://127.0.0.1:8766**
 ## 文件结构
 
 ```
-wechat-weflow-bridge/
+wechat-weflow-bridge-ob11-public/
 ├── main.py              # 入口（启动桥接 + Web 服务）
 ├── state.py             # 共享全局状态
 ├── config.py            # 配置加载
@@ -134,6 +134,10 @@ wechat-weflow-bridge/
 
 - **控制面板** — 查看桥接/AstrBot/WeFlow 连接状态、启停控制、群聊模式切换、实时日志
 - **基础设置** — 在线编辑所有配置项，保存即写入 `config.json`
+
+## 近期改动
+
+本组件相对上游初始版本的主要改动（WorkBuddy 后端集成、群名解析、前后台 / 最小化切换修复、图片回复开关、Web 面板原子保存加固、机器人更名「赛博老农」等），详见仓库根目录 [`README.md`](../../README.md) 的「近期改动记录」一节。
 
 ## 许可证
 
