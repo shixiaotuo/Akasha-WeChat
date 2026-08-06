@@ -43,21 +43,10 @@ DEFAULT_CONFIG = {
     "cli_path": r"D:/WorkBuddy/resources/app.asar.unpacked/cli/bin/codebuddy",
     "node_path": "node",
     "request_timeout": 600,                    # 单次问答整体/读取上限(秒)；hy3 推理模型思考期 SSE 静默，需留足余量
-    # 系统提示词（作为 --system-prompt 传给 serve；实测生效）。
-    # serve 的 generic adapter 不读取 body 里的 skills 字段，因此要让 bot 具备
-    # 张雪峰人格，最可靠的方式就是写进系统提示词（内置其核心框架与表达DNA直答），不在这里强制调用技能文件。
-    "system_prompt": (
-        "你是微信里的助手「赛博老农」，由 WorkBuddy（hy3）驱动，以张雪峰的视角与表达风格作答"
-        "（基于其公开言论提炼，非本人观点，首次可简短声明）。"
-        "核心框架：社会筛子论（学历筛孩子、房子筛父母、工作筛家庭）、选择>努力、就业倒推法"
-        "（看中位数而非顶尖案例）、阶层现实主义（先问家庭条件，有矿没矿策略不同）。"
-        "表达风格：东北大哥语气、短句快节奏、敢下判断，常用「我跟你说」「你听我说」，"
-        "禁用「可能」「或许」「这取决于个人情况」等模糊词；面对选择类问题先灵魂追问"
-        "（多少分、哪个省、家里做什么、想去哪座城市）。"
-        "当用户问升学、志愿、专业、就业、职业规划、职场、阶层相关问题时，用张雪峰框架直接给判断；"
-        "无确切数据时坦诚说明、不编造。其他问题正常回答即可。"
-        "用简体中文，面向群里普通读者。"
-    ),
+    # 角色（人格）选择：指向 personas/<persona>.md。也可在 config 里直接写 "system_prompt" 显式覆盖。
+    # serve 的 generic adapter 不读取 body 里的 skills 字段，因此让 bot 具备某角色人格，
+    # 最可靠的方式就是把该角色的浓缩提示词写进 system_prompt（由 personas/*.md 提供，启动时读取）。
+    "persona": "zhangxuefeng",
     # 模型：通过启动 serve 时的 CODEBUDDY_MODEL 环境变量强制（已在 ServeManager 注入）。
     # 合法 id 是 "hy3-preview-agent"（或 "hy3-preview"）；"hy3" 不是合法 id，会被忽略。
     # 留空字符串 "" 则使用 serve 默认模型（Auto→本机默认 glm）。
@@ -89,6 +78,42 @@ def load_config():
         except Exception:
             pass
     return cfg
+
+
+# ============ 角色（人格）提示词解析 ============
+# 兜底默认提示词：仅当既无显式 system_prompt、又无对应 personas/<name>.md 时使用。
+DEFAULT_SYSTEM_PROMPT = (
+    "你是微信里的助手「赛博老农」，由 WorkBuddy（hy3）驱动。"
+    "用简体中文、面向群里普通读者，正常回答问题即可。"
+)
+
+
+def resolve_system_prompt(cfg):
+    """解析最终用于 --system-prompt 的文案。
+
+    优先级：config 里的显式 system_prompt ＞ personas/{persona}.md ＞ 兜底默认。
+    """
+    # 1) 显式 system_prompt 优先（兼容老习惯：有人在 config 里直接写整段提示词）
+    sp = (cfg.get("system_prompt") or "").strip()
+    if sp:
+        return sp
+    # 2) 否则按 persona 名读取 personas/<name>.md
+    name = (cfg.get("persona") or "").strip()
+    if name:
+        p = os.path.join(HERE, "personas", f"{name}.md")
+        if os.path.exists(p):
+            try:
+                with open(p, "r", encoding="utf-8") as f:
+                    content = f.read().strip()
+                if content:
+                    return content
+                log.warning(f"[persona] personas/{name}.md 为空，使用默认提示词")
+            except Exception as e:
+                log.warning(f"[persona] 读取 personas/{name}.md 失败: {e}")
+        else:
+            log.warning(f"[persona] 未找到 personas/{name}.md，使用默认提示词")
+    # 3) 兜底
+    return DEFAULT_SYSTEM_PROMPT
 
 
 # ============ 日志 ============
@@ -197,6 +222,8 @@ class ServeManager:
     def __init__(self, cfg):
         self.cfg = cfg
         self.proc = None
+        # 启动时解析一次角色提示词（personas/<name>.md 或显式 system_prompt）
+        self.system_prompt = resolve_system_prompt(cfg)
 
     def ensure(self, client: WorkBuddyClient):
         """确保 serve 可用：已运行则直接返回；否则自动拉起。"""
@@ -215,8 +242,8 @@ class ServeManager:
             cfg["node_path"], cfg["cli_path"],
             "--serve", "--port", str(cfg["serve_port"]),
         ]
-        if with_prompt and cfg.get("system_prompt"):
-            cmd += ["--system-prompt", cfg["system_prompt"]]
+        if with_prompt and self.system_prompt:
+            cmd += ["--system-prompt", self.system_prompt]
         env = dict(os.environ)
         env["CODEBUDDY_GATEWAY_AUTH"] = "none"  # 本地无认证，最省心
         # 强制 serve 使用指定模型。源码中模型解析逻辑为
@@ -246,7 +273,7 @@ class ServeManager:
                 log.info("[serve] ✅ 启动成功")
                 return
         # 带 system-prompt 失败 → 降级：不带提示词重试一次
-        if with_prompt and self.cfg.get("system_prompt"):
+        if with_prompt and self.system_prompt:
             log.warning("[serve] 带系统提示词启动失败，尝试不带提示词重拉...")
             self.stop()
             self._launch(with_prompt=False)

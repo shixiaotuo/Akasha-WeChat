@@ -142,6 +142,29 @@ python main.py
 
 ---
 
+## 角色（人格）配置
+
+bot 的「角色人格」是**可配置、易修改**的，不用再改代码。
+
+- 每个角色一个纯文本文件，放在 `personas/` 目录（`.md`，好编辑、不用转义 JSON 引号）：
+  - `personas/zhangxuefeng.md` —— 张雪峰视角（升学 / 志愿 / 就业 / 阶层类问题）
+  - `personas/nihaixia.md` —— 倪海厦经方派（中医 / 养生 / 方剂 / 辨证类问题）
+- 在 `wb_config.json` 用一行选择角色：
+  ```json
+  "persona": "zhangxuefeng"
+  ```
+  改成 `"nihaixia"` 即切到倪海厦，以此类推。
+
+**日常怎么改（都只动一个文件）：**
+- 切换角色 → 改 `wb_config.json` 的 `"persona"` 一行。
+- 调语气措辞 → 直接编辑对应的 `personas/*.md`。
+- 新增角色 → 在 `personas/` 复制一个 `.md` 改名改内容，再把 `persona` 指过去。
+
+> 优先级：`wb_config.json` 里显式写的 `system_prompt` ＞ `personas/{persona}.md` ＞ 代码内置兜底。一般用户只动 `persona` 和对应 `.md` 即可。
+> **改完需重启后端**：双击 `stop.bat` 再 `start.bat`，新人格才会生效。
+
+---
+
 ## 工作原理
 
 1. **接收消息** — 连接 WeFlow SSE 推送，实时接收微信消息（群消息按联系人映射解析真实群名）
@@ -169,7 +192,8 @@ Akasha-WeChat/
     ├── web_panel.py         # Web 控制面板（粉白主题 + 在线配置编辑 + 原子保存）
     ├── uia_sender.py        # Windows UI Automation 发送器（前台/最小化切换逻辑）
     ├── workbuddy_backend.py # 【新增】WorkBuddy 后端（OneBot WS 服务端 + 拉起 codebuddy --serve）
-    ├── wb_config.json       # 【新增】WorkBuddy 后端配置（人格 / 模型 / 端口）
+    ├── wb_config.json       # 【新增】WorkBuddy 后端配置（persona / 模型 / 端口）
+    ├── personas/            # 【新增】角色人格文件（每个角色一个 .md，纯文本好编辑）
     ├── test_backend.py      # 后端自测脚本
     ├── check_cli.py         # CLI 路径检测工具
     ├── config.json          # 配置文件（已 gitignore，需自行创建）
@@ -217,6 +241,11 @@ Akasha-WeChat/
 
 7. **发送方式收敛**
    - WeFlow HTTP API 经核实完全只读（无发送接口），`weflow_api` 模式所有发送路径 404；`senders.py` 已对 `weflow_api` 做自动回退保护，`config.json` 注明 `send_method` 必须为 `uia`。
+
+8. **角色（人格）配置化**
+   - 新增 `personas/` 目录：每个角色一个纯文本 `.md`（`zhangxuefeng.md` 张雪峰视角、`nihaixia.md` 倪海厦经方派），好编辑、不用转义 JSON 引号。
+   - `wb_config.json` 用 `"persona"` 字段选择角色（切换只改一行）；`workbuddy_backend.py` 移除硬编码 prompt、新增 `resolve_system_prompt()`（显式 `system_prompt` ＞ `personas/{persona}.md` ＞ 内置兜底）。
+   - 日常修改只需动一个文件：切换角色改 config 一行、调措辞改对应 `.md`；改完重启后端生效。
 
 > ⚠️ 已知限制：电脑锁屏（Win+L）后 UIA 自动化必然失效（Windows 会话锁定限制），属架构固有限制，需非 UIA 方案方可解决。
 
