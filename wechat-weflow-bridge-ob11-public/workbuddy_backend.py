@@ -677,12 +677,18 @@ class BotServer:
 
     @staticmethod
     def _conv_key(event, by="person"):
-        """会话 key。by='person'→user_id 按人; 'nickname'→昵称（user_id 不稳定时用）。"""
+        """会话 key。
+
+        by='person'  → user_id 按人（私聊 u{uid} / 群聊 g{gid}:u{uid}），但 user_id、group_id
+                       在 WeFlow 重启后会重新分配，故该模式跨重启会丢历史。
+        by='nickname'→ 昵称（user_id / group_id 不稳定时唯一稳定字段）。不论私聊群聊一律只取
+                       昵称，key 统一为 n{昵称}，因此同一人的私聊与所有群聊合并为同一段历史，
+                       且跨重启稳定。代价：不同群/私聊间不再隔离，昵称相同的两个不同真人会碰撞。
+        """
         mtype = event.get("message_type", "private")
         if by == "nickname":
+            # 昵称是唯一跨重启稳定的字段；user_id/group_id 重启后都会变，故丢弃群前缀。
             nick = (event.get("sender") or {}).get("nickname", "") or event.get("user_id", "")
-            if mtype == "group":
-                return f"g{event.get('group_id','')}:n{nick}"
             return f"n{nick}"
         # person（默认）
         uid = event.get("user_id", "")
