@@ -227,6 +227,58 @@ class WorkBuddyClient:
         self.history_max_turns = int(hcfg.get("max_turns") or 20)
         self.history_by = (hcfg.get("by") or "person").strip().lower()
         self.history = {}
+        if self.history_enabled:
+            self._load_history()
+
+    @property
+    def _history_path(self):
+        return os.path.join(HERE, "logs", "history.jsonl")
+
+    def _load_history(self):
+        """从 jsonl 加载历史到内存；每个 key 截断到 max_turns 轮。"""
+        path = self._history_path
+        self.history = {}
+        if not os.path.exists(path):
+            return
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                for line in f:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        rec = json.loads(line)
+                    except json.JSONDecodeError:
+                        continue
+                    k = rec.get("key", "")
+                    if not k:
+                        continue
+                    self.history.setdefault(k, []).append({
+                        "role": rec.get("role", ""),
+                        "content": rec.get("content", ""),
+                    })
+        except Exception as e:
+            log.warning(f"[history] 加载历史文件失败: {e}")
+            self.history = {}
+            return
+        max_msgs = self.history_max_turns * 2
+        for k in list(self.history.keys()):
+            if len(self.history[k]) > max_msgs:
+                self.history[k] = self.history[k][-max_msgs:]
+        log.info(f"[history] 已加载 {sum(len(v) for v in self.history.values())} 条历史 ({len(self.history)} 个会话)")
+
+    @staticmethod
+    def _append_history_line(path, key, role, content):
+        """追加一行到 jsonl 文件。"""
+        try:
+            os.makedirs(os.path.dirname(path), exist_ok=True)
+            with open(path, "a", encoding="utf-8") as f:
+                f.write(json.dumps(
+                    {"key": key, "role": role, "content": content},
+                    ensure_ascii=False,
+                ) + "\n")
+        except Exception as e:
+            log.warning(f"[history] 写历史文件失败: {e}")
 
     def health(self) -> bool:
         try:
@@ -269,13 +321,15 @@ class WorkBuddyClient:
         return "\n".join(lines)
 
     def record_turn(self, conv_key, user_text, assistant_text=None):
-        """记录一轮对话。assistant_text=None 表示本轮助手未成功回复（只记用户侧）。"""
+        """记录一轮对话并落盘到 jsonl。assistant_text=None 只记用户侧。"""
         if not self.history_enabled or not conv_key:
             return
         h = self.history.setdefault(conv_key, [])
         h.append({"role": "user", "content": user_text})
+        self._append_history_line(self._history_path, conv_key, "user", user_text)
         if assistant_text is not None:
             h.append({"role": "assistant", "content": assistant_text})
+            self._append_history_line(self._history_path, conv_key, "assistant", assistant_text)
         max_msgs = self.history_max_turns * 2
         if len(h) > max_msgs:
             self.history[conv_key] = h[-max_msgs:]
