@@ -676,10 +676,18 @@ class BotServer:
         self.semaphore = asyncio.Semaphore(cfg["max_concurrent"])
 
     @staticmethod
-    def _conv_key(mtype, uid, gid):
-        """会话 key（按人记忆）：私聊=uid；群聊=gid:uid。"""
+    def _conv_key(event, by="person"):
+        """会话 key。by='person'→user_id 按人; 'nickname'→昵称（user_id 不稳定时用）。"""
+        mtype = event.get("message_type", "private")
+        if by == "nickname":
+            nick = (event.get("sender") or {}).get("nickname", "") or event.get("user_id", "")
+            if mtype == "group":
+                return f"g{event.get('group_id','')}:n{nick}"
+            return f"n{nick}"
+        # person（默认）
+        uid = event.get("user_id", "")
         if mtype == "group":
-            return f"g{gid}:u{uid}"
+            return f"g{event.get('group_id','')}:u{uid}"
         return f"u{uid}"
 
     async def handler(self, ws: ServerConnection):
@@ -722,8 +730,8 @@ class BotServer:
             who = event.get("sender", {}).get("nickname", "") or uid
             log.info(f"[msg] 收到({mtype}) user_id={uid} group_id={gid} {who}: {text[:60]}")
 
-            # 计算会话 key（按人记忆）：私聊=uid；群聊=gid:uid
-            conv_key = self._conv_key(mtype, uid, gid)
+            # 计算会话 key（按 wb config 的 `history.by` 策略）
+            conv_key = self._conv_key(event, self.wb.history_by)
             try:
                 reply = await asyncio.to_thread(self.wb.ask, text, conv_key)
                 ok = True
