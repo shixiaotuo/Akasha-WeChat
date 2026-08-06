@@ -433,8 +433,9 @@ class BotServer:
 def main():
     cfg = load_config()
     wb = WorkBuddyClient(cfg["serve_host"], cfg["serve_port"], cfg["request_timeout"], cfg)
+    persona_name = cfg.get("persona") or "(未设 persona / 用显式 system_prompt)"
     log.info(f"[config] 模型={cfg.get('model') or 'serve默认(CODEBUDDY_MODEL未设)'} "
-              f"(经 CODEBUDDY_MODEL 环境变量强制)；nihaixia 人格经 --system-prompt 注入")
+              f"(经 CODEBUDDY_MODEL 环境变量强制)；人格 persona={persona_name} 经 --system-prompt 注入")
     serve_mgr = ServeManager(cfg)
 
     # 确保 serve 可用
