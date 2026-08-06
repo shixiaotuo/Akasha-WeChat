@@ -221,6 +221,12 @@ class WorkBuddyClient:
         self.agent_sp_file = None
         if self.mode == "agent":
             self.agent_sp_file = self._write_agent_sysprompt()
+        # 对话历史（按人记忆）：conv_key -> [{role,content}, ...]
+        hcfg = (cfg or {}).get("history") or {}
+        self.history_enabled = bool(hcfg.get("enabled", False))
+        self.history_max_turns = int(hcfg.get("max_turns") or 20)
+        self.history_by = (hcfg.get("by") or "person").strip().lower()
+        self.history = {}
 
     def health(self) -> bool:
         try:
@@ -233,22 +239,53 @@ class WorkBuddyClient:
         except Exception:
             return False
 
-    def ask(self, text: str) -> str:
+    def ask(self, text: str, conv_key: str = None) -> str:
         """发起一次 Agent 执行并取回回复文本。
 
         - serve 模式：POST /api/v1/runs + SSE 流式（generic adapter，无工具能力）
         - agent 模式：subprocess 调 `codebuddy -p` 完整 agent（自带 WebSearch 等工具，可联网）
         模式由 config 的 llm_mode 决定（"serve" 默认，或 "agent"）。
+        conv_key 用于按人拼接历史上下文；None 时不记历史。
         """
         if self.mode == "agent":
-            return self._ask_agent(text)
-        return self._ask_serve(text)
+            return self._ask_agent(text, conv_key)
+        return self._ask_serve(text, conv_key)
 
-    def _ask_serve(self, text: str) -> str:
+    # —— 对话历史（按人记忆）——
+    def _conv_text(self, text: str, conv_key) -> str:
+        """把最近历史拼到当前问题前，作为一次性上下文前缀。"""
+        if not self.history_enabled or not conv_key:
+            return text
+        hist = self.history.get(conv_key, [])
+        if not hist:
+            return text
+        recent = hist[-(self.history_max_turns * 2):]
+        lines = [f"【对话历史（最近 {len(recent)//2} 轮，仅用于理解上下文，勿复述历史全文）】\n"]
+        for m in recent:
+            role = "用户" if m["role"] == "user" else "助手"
+            lines.append(f"{role}：{m['content']}")
+        lines.append("【当前问题】")
+        lines.append(text)
+        return "\n".join(lines)
+
+    def record_turn(self, conv_key, user_text, assistant_text=None):
+        """记录一轮对话。assistant_text=None 表示本轮助手未成功回复（只记用户侧）。"""
+        if not self.history_enabled or not conv_key:
+            return
+        h = self.history.setdefault(conv_key, [])
+        h.append({"role": "user", "content": user_text})
+        if assistant_text is not None:
+            h.append({"role": "assistant", "content": assistant_text})
+        max_msgs = self.history_max_turns * 2
+        if len(h) > max_msgs:
+            self.history[conv_key] = h[-max_msgs:]
+
+    def _ask_serve(self, text: str, conv_key: str = None) -> str:
+        full_text = self._conv_text(text, conv_key)
         payload = {
             "id": f"u{int(time.time() * 1000)}",
             "type": "user",
-            "text": text,
+            "text": full_text,
             "sender": {"id": "wechatbot", "name": "WeChatBot"},
         }
         # 注意：serve 的 generic adapter 的 parseInbound 只读取
@@ -286,7 +323,7 @@ class WorkBuddyClient:
             f.write(content + env_note)
         return path
 
-    def _ask_agent(self, text: str) -> str:
+    def _ask_agent(self, text: str, conv_key: str = None) -> str:
         """agent 模式：codebuddy -p 完整 agent，真正加载 Skill 工具（含 WebSearch），可联网查数据。
 
         关键参数：
@@ -300,6 +337,7 @@ class WorkBuddyClient:
         max_turns = int(acfg.get("max_turns") or 10)
         timeout = int(acfg.get("timeout") or 120)
         disallowed = acfg.get("disallowed_tools") or "Bash,Edit,Write,PowerShell,Shell"
+        full_text = self._conv_text(text, conv_key)
         cmd = [
             cfg["node_path"], cfg["cli_path"], "-p",
             "--system-prompt-file", self.agent_sp_file,
@@ -308,7 +346,7 @@ class WorkBuddyClient:
             "--max-turns", str(max_turns),
             "--disallowedTools", disallowed,
             "--output-format", "text",
-            text,
+            full_text,
         ]
         env = dict(os.environ)
         env["CODEBUDDY_GATEWAY_AUTH"] = "none"
@@ -583,6 +621,13 @@ class BotServer:
         self.connections = set()
         self.semaphore = asyncio.Semaphore(cfg["max_concurrent"])
 
+    @staticmethod
+    def _conv_key(mtype, uid, gid):
+        """会话 key（按人记忆）：私聊=uid；群聊=gid:uid。"""
+        if mtype == "group":
+            return f"g{gid}:u{uid}"
+        return f"u{uid}"
+
     async def handler(self, ws: ServerConnection):
         peer = getattr(ws, "remote_address", "?")
         log.info(f"[ws] Bridge 已连接: {peer}")
@@ -623,15 +668,22 @@ class BotServer:
             who = event.get("sender", {}).get("nickname", "") or uid
             log.info(f"[msg] 收到({mtype}) user_id={uid} group_id={gid} {who}: {text[:60]}")
 
+            # 计算会话 key（按人记忆）：私聊=uid；群聊=gid:uid
+            conv_key = self._conv_key(mtype, uid, gid)
             try:
-                reply = await asyncio.to_thread(self.wb.ask, text)
+                reply = await asyncio.to_thread(self.wb.ask, text, conv_key)
+                ok = True
             except Exception as e:
                 log.error(f"[msg] WorkBuddy 调用失败: {e}")
                 reply = "（AI 暂时开小差了，请稍后再试～）"
+                ok = False
 
             if not reply:
                 reply = "（没有得到回复）"
             await self.send_reply(ws, event, reply)
+
+            # 记录对话历史（失败轮次只记用户侧，不记错误占位回复）
+            self.wb.record_turn(conv_key, text, reply if ok else None)
 
     async def send_reply(self, ws: ServerConnection, event: dict, reply: str):
         mtype = event.get("message_type", "private")

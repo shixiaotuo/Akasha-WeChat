@@ -5,7 +5,7 @@
   "cli_path": "D:/WorkBuddy/resources/app.asar.unpacked/cli/bin/codebuddy",
   "node_path": "node",
   "request_timeout": 600,
-  "persona": "zhangxuefeng",
+  "persona": "guodegang",
   "ob_ws_host": "127.0.0.1",
   "ob_ws_port": 11229,
   "reply_chunk_size": 1000,
@@ -28,5 +28,11 @@
     "enabled": false,
     "users": [],
     "groups": []
+  },
+
+  "history": {
+    "enabled": false,
+    "max_turns": 20,
+    "by": "person"
   }
 }
