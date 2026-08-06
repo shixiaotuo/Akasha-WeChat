@@ -43,9 +43,12 @@ DEFAULT_CONFIG = {
     "cli_path": r"D:/WorkBuddy/resources/app.asar.unpacked/cli/bin/codebuddy",
     "node_path": "node",
     "request_timeout": 600,                    # 单次问答整体/读取上限(秒)；hy3 推理模型思考期 SSE 静默，需留足余量
-    # 角色（人格）选择：指向 personas/<persona>.md。也可在 config 里直接写 "system_prompt" 显式覆盖。
-    # serve 的 generic adapter 不读取 body 里的 skills 字段，因此让 bot 具备某角色人格，
-    # 最可靠的方式就是把该角色的浓缩提示词写进 system_prompt（由 personas/*.md 提供，启动时读取）。
+    # 角色（人格）选择：按名查找。
+    # 查找顺序：显式 system_prompt ＞ 本机 Skill(~/.workbuddy/skills/<persona>/SKILL.md) ＞
+    #           项目 personas/<persona>.md ＞ 兜底默认。
+    # 优先读本机 Skill：bot 直接用你安装的「真实 Skill 全文」，且你更新 Skill 时自动同步。
+    # 注：serve 的 generic adapter 不读取 body 里的 skills 字段，故通过
+    #     --system-prompt-file 注入（解决长文本命令行长度上限）。
     "persona": "zhangxuefeng",
     # 模型：通过启动 serve 时的 CODEBUDDY_MODEL 环境变量强制（已在 ServeManager 注入）。
     # 合法 id 是 "hy3-preview-agent"（或 "hy3-preview"）；"hy3" 不是合法 id，会被忽略。
@@ -88,32 +91,108 @@ DEFAULT_SYSTEM_PROMPT = (
 )
 
 
-def resolve_system_prompt(cfg):
-    """解析最终用于 --system-prompt 的文案。
+def _find_local_skill(name: str):
+    """在本机 ~/.workbuddy/skills/ 下查找名为 <name> 的 Skill 的 SKILL.md。
 
-    优先级：config 里的显式 system_prompt ＞ personas/{persona}.md ＞ 兜底默认。
+    支持精确目录名匹配，以及「目录名 ↔ persona 名互相包含」的模糊匹配
+    （兼容 persona='zhangxuefeng' 但目录实为 'zhangxuefeng-perspective' 的情况）。
+    返回 SKILL.md 路径或 None。
+    """
+    base = os.path.join(os.path.expanduser("~"), ".workbuddy", "skills")
+    if not os.path.isdir(base):
+        return None
+    exact = os.path.join(base, name, "SKILL.md")
+    if os.path.exists(exact):
+        return exact
+    low_n = name.lower()
+    for d in os.listdir(base):
+        dp = os.path.join(base, d)
+        if os.path.isdir(dp):
+            low_d = d.lower()
+            if low_n in low_d or low_d in low_n:
+                p = os.path.join(dp, "SKILL.md")
+                if os.path.exists(p):
+                    return p
+    return None
+
+
+def resolve_system_prompt(cfg):
+    """解析最终用于 system prompt 的文案。
+
+    优先级：config 里的显式 system_prompt ＞
+            本机 WorkBuddy Skill（~/.workbuddy/skills/<persona>/SKILL.md）＞
+            项目内 personas/<persona>.md ＞ 兜底默认。
+    优先读本机 Skill：这样 bot 直接用你安装的「真实 Skill 全文」，
+    且你更新 Skill 时 bot 自动同步，不必再维护两份。
     """
     # 1) 显式 system_prompt 优先（兼容老习惯：有人在 config 里直接写整段提示词）
     sp = (cfg.get("system_prompt") or "").strip()
     if sp:
         return sp
-    # 2) 否则按 persona 名读取 personas/<name>.md
+    # 2) 按 persona 名查找：本机 Skill 优先，其次项目 personas
     name = (cfg.get("persona") or "").strip()
     if name:
-        p = os.path.join(HERE, "personas", f"{name}.md")
-        if os.path.exists(p):
-            try:
-                with open(p, "r", encoding="utf-8") as f:
-                    content = f.read().strip()
-                if content:
-                    return content
-                log.warning(f"[persona] personas/{name}.md 为空，使用默认提示词")
-            except Exception as e:
-                log.warning(f"[persona] 读取 personas/{name}.md 失败: {e}")
-        else:
-            log.warning(f"[persona] 未找到 personas/{name}.md，使用默认提示词")
+        skill_path = _find_local_skill(name)
+        candidates = []
+        if skill_path:
+            dirname = os.path.basename(os.path.dirname(skill_path))
+            candidates.append((skill_path, f"本机 Skill ~/.workbuddy/skills/{dirname}/SKILL.md"))
+        candidates.append((os.path.join(HERE, "personas", f"{name}.md"), f"项目 personas/{name}.md"))
+        for p, label in candidates:
+            if os.path.exists(p):
+                try:
+                    with open(p, "r", encoding="utf-8") as f:
+                        content = f.read().strip()
+                    if content:
+                        log.info(f"[persona] 使用角色文件: {label}")
+                        return content
+                    log.warning(f"[persona] {label} 为空，尝试下一个")
+                except Exception as e:
+                    log.warning(f"[persona] 读取 {label} 失败: {e}")
+        log.warning(f"[persona] 未找到 {name} 的 Skill / persona 文件，使用默认提示词")
     # 3) 兜底
     return DEFAULT_SYSTEM_PROMPT
+
+
+# ============ 角色文本提取（防超长 Skill 撑爆上下文） ============
+PERSONA_MAX_CHARS = 9000  # 约 6000-9000 token，hy3 上下文可控；超过则硬截断
+# 人格核心章节白名单关键词（命中则保留）；其余章节（研究流程/时间线/谱系/附录/实测等）丢弃。
+_PERSONA_KEEP = ["角色扮演", "身份", "心智模型", "启发式", "表达", "诚实", "框架",
+                "世界观", "核心", "价值观", "我拒绝", "我追求", "我拒绝的"]
+_PERSONA_SKIP = ["工作流", "协议", "checkpoint", "时间线", "谱系", "附录", "实测",
+                 "反例", "研究", "来源", "引用", "动态", "最新", "关键引用", "调研"]
+
+
+def _extract_persona_core(text: str) -> str:
+    """从本机 Skill 全文提取「人格核心」，避免把超大 Skill（如 nihaixia 32万字）全量灌入 system prompt。
+
+    策略：按 '## ' 章节切分，只保留白名单章节（角色/身份/心智模型/启发式/表达/诚实/价值观等），
+    其余（研究流程、时间线、谱系、附录、实测、反例黑名单等）丢弃；最后硬截断到 PERSONA_MAX_CHARS。
+    """
+    if "## " not in text:
+        core = text
+    else:
+        sections, cur_h, cur_b = [], None, []
+        for line in text.splitlines():
+            if line.startswith("## ") and not line.startswith("### "):
+                if cur_h is not None:
+                    sections.append((cur_h, "\n".join(cur_b)))
+                cur_h = line[3:].strip()
+                cur_b = [line]
+            elif cur_h is not None:
+                cur_b.append(line)
+        if cur_h is not None:
+            sections.append((cur_h, "\n".join(cur_b)))
+        kept = []
+        for h, b in sections:
+            if any(k in h for k in _PERSONA_SKIP):
+                continue
+            if any(k in h for k in _PERSONA_KEEP):
+                kept.append(b)
+        core = "\n\n".join(kept).strip() if kept else text
+    if len(core) > PERSONA_MAX_CHARS:
+        core = core[:PERSONA_MAX_CHARS] + "\n\n…（本机 Skill 内容较长，已截断保留人格核心；完整版见 ~/.workbuddy/skills）"
+    return core
 
 
 # ============ 日志 ============
@@ -130,11 +209,18 @@ class WorkBuddyClient:
     def __init__(self, host, port, timeout, cfg=None):
         self.base = f"http://{host}:{port}"
         self.timeout = timeout
+        self.cfg = cfg or {}
+        self.mode = (self.cfg.get("llm_mode") or "serve").strip().lower()
         self.headers = {
             "X-CodeBuddy-Request": "1",
             "Content-Type": "application/json",
         }
         self.session = requests.Session()
+        # 解析角色提示词（完整 raw）；agent 模式额外准备 system prompt 文件
+        self.system_prompt = resolve_system_prompt(self.cfg)
+        self.agent_sp_file = None
+        if self.mode == "agent":
+            self.agent_sp_file = self._write_agent_sysprompt()
 
     def health(self) -> bool:
         try:
@@ -148,7 +234,17 @@ class WorkBuddyClient:
             return False
 
     def ask(self, text: str) -> str:
-        """发起一次 Agent 执行并流式取回回复文本。"""
+        """发起一次 Agent 执行并取回回复文本。
+
+        - serve 模式：POST /api/v1/runs + SSE 流式（generic adapter，无工具能力）
+        - agent 模式：subprocess 调 `codebuddy -p` 完整 agent（自带 WebSearch 等工具，可联网）
+        模式由 config 的 llm_mode 决定（"serve" 默认，或 "agent"）。
+        """
+        if self.mode == "agent":
+            return self._ask_agent(text)
+        return self._ask_serve(text)
+
+    def _ask_serve(self, text: str) -> str:
         payload = {
             "id": f"u{int(time.time() * 1000)}",
             "type": "user",
@@ -174,6 +270,69 @@ class WorkBuddyClient:
         if not run_id:
             raise RuntimeError(f"runs 未返回 runId: {body}")
         return self._stream(run_id)
+
+    def _write_agent_sysprompt(self):
+        """agent 模式专用 system prompt 文件：完整 raw（含工作流），超长则提取核心。"""
+        path = os.path.join(HERE, "logs", "_agent_sysprompt.txt")
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        raw = self.system_prompt
+        content = raw if len(raw) <= 20000 else _extract_persona_core(raw)
+        env_note = (
+            "\n\n【运行环境说明】你运行在微信 bot 后端（codebuddy -p 完整 agent 模式），"
+            "可以调用 WebSearch 等工具查询实时数据（院校、专业、就业、政策、新闻等）。"
+            "请主动查证你不确定或有时间敏感性的事实；对最终仍无法核实的内容，坦诚说明不确定，不要编造。"
+        )
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(content + env_note)
+        return path
+
+    def _ask_agent(self, text: str) -> str:
+        """agent 模式：codebuddy -p 完整 agent，真正加载 Skill 工具（含 WebSearch），可联网查数据。
+
+        关键参数：
+        - --no-session-persistence：每次调用独立、不落盘，彻底避免与桌面端 WorkBuddy 会话冲突。
+        - -y (bypassPermissions) + --disallowedTools 禁掉 Bash/Edit/Write 等危险操作，
+          仅保留 WebSearch/Read 等只读/查询能力，防止微信群陌生消息诱导执行命令或删文件。
+        - --max-turns：限制 agent 轮数，防止检索/推理失控死循环。
+        """
+        cfg = self.cfg
+        acfg = cfg.get("agent") or {}
+        max_turns = int(acfg.get("max_turns") or 10)
+        timeout = int(acfg.get("timeout") or 120)
+        disallowed = acfg.get("disallowed_tools") or "Bash,Edit,Write,PowerShell,Shell"
+        cmd = [
+            cfg["node_path"], cfg["cli_path"], "-p",
+            "--system-prompt-file", self.agent_sp_file,
+            "--no-session-persistence",
+            "-y",
+            "--max-turns", str(max_turns),
+            "--disallowedTools", disallowed,
+            "--output-format", "text",
+            text,
+        ]
+        env = dict(os.environ)
+        env["CODEBUDDY_GATEWAY_AUTH"] = "none"
+        model = (cfg.get("model") or "").strip()
+        if model:
+            env["CODEBUDDY_MODEL"] = model
+        log.info(f"[agent] 调用 codebuddy -p (max_turns={max_turns}, disallowed={disallowed})")
+        try:
+            proc = subprocess.run(
+                cmd, capture_output=True, text=True, encoding="utf-8",
+                timeout=timeout, env=env,
+            )
+        except subprocess.TimeoutExpired:
+            log.error(f"[agent] 执行超时({timeout}s)，已中止")
+            return "（这次想得有点久，超时啦，换个简短的问题试试～）"
+        if proc.returncode != 0:
+            err = (proc.stderr or proc.stdout or "")[:600].strip()
+            log.error(f"[agent] 返回码 {proc.returncode}: {err}")
+            return "（AI 出错了，请稍后再试～）"
+        out = (proc.stdout or "").strip()
+        if not out:
+            out = "（没有得到回复）"
+        log.info(f"[agent] 回复长度 {len(out)}")
+        return out
 
     def _stream(self, run_id: str) -> str:
         url = self.base + f"/api/v1/runs/{run_id}/stream"
@@ -222,11 +381,17 @@ class ServeManager:
     def __init__(self, cfg):
         self.cfg = cfg
         self.proc = None
+        self.mode = (cfg.get("llm_mode") or "serve").strip().lower()
+        self.use_serve = self.mode != "agent"
         # 启动时解析一次角色提示词（personas/<name>.md 或显式 system_prompt）
         self.system_prompt = resolve_system_prompt(cfg)
 
     def ensure(self, client: WorkBuddyClient):
-        """确保 serve 可用：已运行则直接返回；否则自动拉起。"""
+        """确保 serve 可用：已运行则直接返回；否则自动拉起。
+        agent 模式下不启动 --serve（由 WorkBuddyClient 走 codebuddy -p 子进程）。"""
+        if not self.use_serve:
+            log.info("[serve] agent 模式：不启动 --serve，改由 WorkBuddyClient 走 codebuddy -p 子进程")
+            return
         if client.health():
             log.info("[serve] 检测到已运行的 --serve 服务，复用之")
             return
@@ -236,6 +401,25 @@ class ServeManager:
         log.info("[serve] 未检测到 serve，尝试自动拉起...")
         self._launch(with_prompt=True)
 
+    def _write_sysprompt_file(self):
+        """把 system_prompt 写入文件，用 --system-prompt-file 注入。
+
+        原因：本机真实 Skill 全文可能 >1 万字，远超 Windows 命令行参数长度上限；
+        且需追加「无外部工具」的运行环境说明，防止 Skill 里「必须用 WebSearch」
+        类指令在 serve 的 generic 模式下导致 bot 幻觉（谎称已查询）。
+        """
+        path = os.path.join(HERE, "logs", "_sysprompt.txt")
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        env_note = (
+            "\n\n【运行环境说明】你当前运行在微信 bot 后端（codebuddy --serve 的 generic 模式），"
+            "无法调用 WebSearch、文件读写等外部工具。涉及具体专业、院校、行业、政策的最新数据，"
+            "若没有确切把握，请坦诚说明「这点我不太确定 / 我得查一下」，不要谎称已查询或使用编造的数据；"
+            "其余人格表达与判断照常。"
+        )
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(_extract_persona_core(self.system_prompt) + env_note)
+        return path
+
     def _launch(self, with_prompt: bool):
         cfg = self.cfg
         cmd = [
@@ -243,7 +427,8 @@ class ServeManager:
             "--serve", "--port", str(cfg["serve_port"]),
         ]
         if with_prompt and self.system_prompt:
-            cmd += ["--system-prompt", self.system_prompt]
+            sp_file = self._write_sysprompt_file()
+            cmd += ["--system-prompt-file", sp_file]
         env = dict(os.environ)
         env["CODEBUDDY_GATEWAY_AUTH"] = "none"  # 本地无认证，最省心
         # 强制 serve 使用指定模型。源码中模型解析逻辑为
@@ -344,6 +529,52 @@ def split_text(text: str, size: int = 1000):
     return chunks or [text]
 
 
+# ============ 黑白名单 ============
+def _in_list(event: dict, cfg: dict, key: str) -> bool:
+    """判断事件是否命中指定名单（blacklist / whitelist）。
+
+    名单配置：{"enabled": bool, "users": [...], "groups": [...]}
+    - users：按发送者 user_id 命中
+    - groups：群消息时按 group_id 命中（整群）
+    id 统一转 str 比较，兼容 int 与 str。
+    """
+    lst = cfg.get(key) or {}
+    if not lst.get("enabled", False):
+        return False
+    users = {str(x) for x in (lst.get("users") or [])}
+    groups = {str(x) for x in (lst.get("groups") or [])}
+    if not users and not groups:
+        return False
+    uid = str(event.get("user_id", ""))
+    if uid and uid in users:
+        return True
+    if event.get("message_type", "private") == "group":
+        gid = str(event.get("group_id", ""))
+        if gid and gid in groups:
+            return True
+    return False
+
+
+def is_blacklisted(event: dict, cfg: dict) -> bool:
+    """按黑名单拦截：命中则返回 True（bot 不回复）。"""
+    return _in_list(event, cfg, "blacklist")
+
+
+def blocked_reason(event: dict, cfg: dict) -> str:
+    """综合判断拦截原因；未拦截返回空字符串。
+
+    优先级：黑名单 > 白名单。
+    - 命中黑名单 → "黑名单"
+    - 白名单开启但未命中 → "白名单外"
+    """
+    if _in_list(event, cfg, "blacklist"):
+        return "黑名单"
+    wl = cfg.get("whitelist") or {}
+    if wl.get("enabled", False) and not _in_list(event, cfg, "whitelist"):
+        return "白名单外"
+    return ""
+
+
 # ============ Bot 服务端 ============
 class BotServer:
     def __init__(self, wb: WorkBuddyClient, cfg):
@@ -375,12 +606,22 @@ class BotServer:
 
     async def handle_message(self, ws: ServerConnection, event: dict):
         async with self.semaphore:
+            # —— 黑白名单拦截（在任何 LLM 调用之前，避免浪费额度）——
+            reason = blocked_reason(event, self.cfg)
+            if reason:
+                bl_who = event.get("sender", {}).get("nickname", "") or event.get("user_id", "")
+                log.info(f"[msg] 已拦截({reason}): user_id={event.get('user_id')} "
+                          f"group_id={event.get('group_id', '')} {bl_who}")
+                return
+
             text = extract_text(event.get("message", []))
             if not text:
                 return
             mtype = event.get("message_type", "private")
-            who = event.get("sender", {}).get("nickname", "") or event.get("user_id", "")
-            log.info(f"[msg] 收到({mtype}) {who}: {text[:60]}")
+            uid = event.get("user_id", "")
+            gid = event.get("group_id", "") if mtype == "group" else ""
+            who = event.get("sender", {}).get("nickname", "") or uid
+            log.info(f"[msg] 收到({mtype}) user_id={uid} group_id={gid} {who}: {text[:60]}")
 
             try:
                 reply = await asyncio.to_thread(self.wb.ask, text)
@@ -434,8 +675,11 @@ def main():
     cfg = load_config()
     wb = WorkBuddyClient(cfg["serve_host"], cfg["serve_port"], cfg["request_timeout"], cfg)
     persona_name = cfg.get("persona") or "(未设 persona / 用显式 system_prompt)"
+    mode = (cfg.get("llm_mode") or "serve").strip().lower()
+    inject_desc = "经 --system-prompt-file 注入（-p agent 模式）" if mode == "agent" \
+        else "经 --system-prompt 注入（--serve 模式）"
     log.info(f"[config] 模型={cfg.get('model') or 'serve默认(CODEBUDDY_MODEL未设)'} "
-              f"(经 CODEBUDDY_MODEL 环境变量强制)；人格 persona={persona_name} 经 --system-prompt 注入")
+              f"(经 CODEBUDDY_MODEL 环境变量强制)；llm_mode={mode}；人格 persona={persona_name} {inject_desc}")
     serve_mgr = ServeManager(cfg)
 
     # 确保 serve 可用

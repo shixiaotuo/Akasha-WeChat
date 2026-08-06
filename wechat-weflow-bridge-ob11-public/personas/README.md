@@ -1,26 +1,20 @@
-# 角色（人格）文件
+# personas/ —— 角色（人格）提示词目录
 
-bot 的「人格 / 角色」定义放在本目录，每个角色一个 `.md` 纯文本文件，方便直接编辑，不用处理 JSON 引号转义。
+bot 的人格由 `wb_config.json` 的 `persona` 字段选择，解析逻辑见
+`workbuddy_backend.py` 的 `resolve_system_prompt()`：
 
-## 已有角色
-- `zhangxuefeng.md` —— 张雪峰视角（升学 / 志愿 / 就业 / 阶层类问题）
-- `nihaixia.md` —— 倪海厦经方派（中医 / 养生 / 方剂 / 辨证类问题）
+  优先级（从高到低）：
+    1. config 显式 `system_prompt`        （最高优先）
+    2. 本机 Skill  ~/.workbuddy/skills/<persona>/SKILL.md   ← 主力，自动同步你安装的 Skill
+    3. 本目录      personas/<persona>.md                        ← 兜底
+    4. 默认提示词
 
-## 怎么切换角色
-打开 `wb_config.json`，改一行即可：
-```json
-"persona": "zhangxuefeng"
-```
-改成 `"nihaixia"` 就切到倪海厦，以此类推。**改完要重启后端**（双击 `stop.bat` 再 `start.bat`）。
+## 结论
+- 正常情况 bot 直接读你**本机安装的张雪峰 Skill 全文**，本目录文件不会被使用。
+- 本目录的 `zhangxuefeng.md` 只是**兜底**：仅当本机 Skill 被删除/改名时才回退。
+  它是独立维护的精简版，不会随本机 Skill 更新自动同步。
+- `nihaixia.md` 已删除（bot 当前只用 zhangxuefeng）。
 
-## 怎么调措辞
-直接编辑对应的 `.md` 文件内容即可，也是只改这一个文件。
-
-## 怎么新增一个角色
-1. 在本目录复制一个 `.md`（如 `newpersona.md`），改成你要的人设文案。
-2. 在 `wb_config.json` 里把 `"persona"` 指向它：`"persona": "newpersona"`。
-3. 重启后端生效。
-
-## 优先级说明
-后端解析顺序：`wb_config.json` 里的显式 `system_prompt` 字段（若填了）＞ 本目录 `personas/{persona}.md` ＞ 代码内置兜底提示词。
-一般用户只动 `persona` 字段和对应 `.md` 就够了。
+## 如何更新人格
+改本机 `~/.workbuddy/skills/zhangxuefeng-perspective/SKILL.md` 即可，
+bot 重启后自动生效，无需维护本目录。

@@ -9,5 +9,24 @@
   "ob_ws_host": "127.0.0.1",
   "ob_ws_port": 11229,
   "reply_chunk_size": 1000,
-  "max_concurrent": 1
+  "max_concurrent": 1,
+
+  "llm_mode": "agent",
+  "agent": {
+    "max_turns": 10,
+    "timeout": 120,
+    "disallowed_tools": "Bash,Edit,Write,PowerShell,Shell"
+  },
+
+  "blacklist": {
+    "enabled": false,
+    "users": [],
+    "groups": []
+  },
+
+  "whitelist": {
+    "enabled": false,
+    "users": [],
+    "groups": []
+  }
 }
