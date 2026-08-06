@@ -167,28 +167,6 @@ def _reply_length_rule(cfg):
     )
 
 
-def _truncate_reply(reply: str, max_chars: int) -> str:
-    """把最终回复精简到 max_chars 字符以内，尽量在句末/换行处断开，避免砍断句子。
-
-    若确有多余内容被丢弃，末尾追加「（回复过长，已精简）」提示。
-    仅作用于「最终发给用户」的文字，不影响模型内部推理/工具调用。
-    """
-    if max_chars <= 0 or len(reply) <= max_chars:
-        return reply
-    head = reply[:max_chars]
-    # 在 head 内从后往前找最近的句末标点/换行，作为最贴近上限的截断点
-    cut = -1
-    for i in range(len(head) - 1, -1, -1):
-        if head[i] in "。！？!?\n":
-            cut = i + 1
-            break
-    truncated = head[:cut] if cut > 0 else head
-    # 仍有后续内容被丢弃
-    if len(truncated) < len(reply):
-        truncated = truncated.rstrip() + "（回复过长，已精简）"
-    return truncated
-
-
 # ============ 角色文本提取（防超长 Skill 撑爆上下文） ============
 PERSONA_MAX_CHARS = 9000  # 约 6000-9000 token，hy3 上下文可控；超过则硬截断
 # 人格核心章节白名单关键词（命中则保留）；其余章节（研究流程/时间线/谱系/附录/实测等）丢弃。
@@ -783,11 +761,6 @@ class BotServer:
 
             if not reply:
                 reply = "（没有得到回复）"
-            # 回复字数上限（按字符计；优先在句末/换行处截断，避免砍断句子）
-            max_chars = int(self.cfg.get("max_reply_chars") or 0)
-            if max_chars > 0 and len(reply) > max_chars:
-                log.info(f"[reply] 回复 {len(reply)} 字，已精简到 {max_chars} 字以内")
-                reply = _truncate_reply(reply, max_chars)
             await self.send_reply(ws, event, reply)
 
             # 记录对话历史（失败轮次只记用户侧，不记错误占位回复）
@@ -807,11 +780,6 @@ class BotServer:
         if target is None:
             log.warning(f"[reply] 缺少目标 ID，无法回复: {event.get('post_type')}")
             return
-
-        # 兜底截断（按字符计；与 handle_message 中的截断幂等，确保任何入口都不超限）
-        max_chars = int(self.cfg.get("max_reply_chars") or 0)
-        if max_chars > 0 and len(reply) > max_chars:
-            reply = _truncate_reply(reply, max_chars)
 
         chunks = split_text(reply, self.cfg["reply_chunk_size"])
         for idx, ch in enumerate(chunks):
