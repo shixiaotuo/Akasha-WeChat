@@ -59,6 +59,7 @@ DEFAULT_CONFIG = {
     "ob_ws_port": 11229,
     # 回复行为
     "reply_chunk_size": 1000,                  # 单条微信消息最大字符数（超长自动分段）
+    "max_reply_chars": 0,                      # 单次回复最大字符数（按字符计，1字=1字符；0=不限制）
     "max_concurrent": 4,                       # 并发处理消息数上限
 }
 
@@ -154,6 +155,18 @@ def resolve_system_prompt(cfg):
     return DEFAULT_SYSTEM_PROMPT
 
 
+def _reply_length_rule(cfg):
+    """按 max_reply_chars 生成「回复长度要求」，注入 system prompt（软约束）。0=不限制。"""
+    n = int((cfg or {}).get("max_reply_chars") or 0)
+    if n <= 0:
+        return ""
+    return (
+        f"\n\n【回复长度要求】请用简洁的中文回复，单次回复严格不超过 {n} 字"
+        f"（含中英文，1个字=1个字符）。若内容较多，只保留最核心的一两句，"
+        f"不要展开长篇大论、不要复述历史、不要重复啰嗦。"
+    )
+
+
 # ============ 角色文本提取（防超长 Skill 撑爆上下文） ============
 PERSONA_MAX_CHARS = 9000  # 约 6000-9000 token，hy3 上下文可控；超过则硬截断
 # 人格核心章节白名单关键词（命中则保留）；其余章节（研究流程/时间线/谱系/附录/实测等）丢弃。
@@ -217,7 +230,7 @@ class WorkBuddyClient:
         }
         self.session = requests.Session()
         # 解析角色提示词（完整 raw）；agent 模式额外准备 system prompt 文件
-        self.system_prompt = resolve_system_prompt(self.cfg)
+        self.system_prompt = resolve_system_prompt(self.cfg) + _reply_length_rule(self.cfg)
         self.agent_sp_file = None
         if self.mode == "agent":
             self.agent_sp_file = self._write_agent_sysprompt()
@@ -476,7 +489,7 @@ class ServeManager:
         self.mode = (cfg.get("llm_mode") or "serve").strip().lower()
         self.use_serve = self.mode != "agent"
         # 启动时解析一次角色提示词（personas/<name>.md 或显式 system_prompt）
-        self.system_prompt = resolve_system_prompt(cfg)
+        self.system_prompt = resolve_system_prompt(cfg) + _reply_length_rule(cfg)
 
     def ensure(self, client: WorkBuddyClient):
         """确保 serve 可用：已运行则直接返回；否则自动拉起。
@@ -748,6 +761,11 @@ class BotServer:
 
             if not reply:
                 reply = "（没有得到回复）"
+            # 回复字数硬上限（按字符计；中文一个字=一个字符）
+            max_chars = int(self.cfg.get("max_reply_chars") or 0)
+            if max_chars > 0 and len(reply) > max_chars:
+                log.info(f"[reply] 回复 {len(reply)} 字，已硬截断到 {max_chars} 字")
+                reply = reply[:max_chars]
             await self.send_reply(ws, event, reply)
 
             # 记录对话历史（失败轮次只记用户侧，不记错误占位回复）
@@ -767,6 +785,11 @@ class BotServer:
         if target is None:
             log.warning(f"[reply] 缺少目标 ID，无法回复: {event.get('post_type')}")
             return
+
+        # 兜底硬截断（按字符计；与 handle_message 中的截断幂等，确保任何入口都不超限）
+        max_chars = int(self.cfg.get("max_reply_chars") or 0)
+        if max_chars > 0 and len(reply) > max_chars:
+            reply = reply[:max_chars]
 
         chunks = split_text(reply, self.cfg["reply_chunk_size"])
         for idx, ch in enumerate(chunks):

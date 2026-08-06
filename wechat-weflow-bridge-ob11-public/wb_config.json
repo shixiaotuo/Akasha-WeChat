@@ -9,6 +9,7 @@
   "ob_ws_host": "127.0.0.1",
   "ob_ws_port": 11229,
   "reply_chunk_size": 1000,
+  "max_reply_chars": 150,
   "max_concurrent": 1,
 
   "llm_mode": "agent",
